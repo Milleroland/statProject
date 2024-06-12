@@ -1,4 +1,5 @@
 import numpy as np
+import math
 from sklearn.metrics.pairwise import pairwise_kernels, euclidean_distances
 from sklearn.metrics.pairwise import pairwise_distances
 from joblib import Parallel, delayed
@@ -45,17 +46,21 @@ def dCor(X, Y):
 def hsic(data1, data2, kernel='rbf', sigma=None):
     n_samples_X = data1.shape[0]
 
+    pairwise_sq_dists_X = pairwise_distances(data1, metric="sqeuclidean")
+    pairwise_sq_dists_Y = pairwise_distances(data2, metric="sqeuclidean")
     if kernel == 'rbf':
         if sigma is None:
-            # Estimate sigma from the median distance
-            dists_X = euclidean_distances(data1, squared=True)
-            dists_Y = euclidean_distances(data2, squared=True)
-            sigma_X = np.median(dists_X[dists_X > 0])  # Exclude zero distances
-            sigma_Y = np.median(dists_Y[dists_Y > 0])
-            sigma = np.sqrt(sigma_X * sigma_Y)
-        gamma = 1.0 / (2 * sigma**2)
-        K = pairwise_kernels(data1, metric='rbf', gamma=gamma)
-        L = pairwise_kernels(data2, metric='rbf', gamma=gamma)
+            distances = euclidean_distances(data1, data2)
+
+            # Extract the upper triangle of the distance matrix without the diagonal
+            triu_indices = np.triu_indices_from(distances, k=1)
+            upper_tri_distances = distances[triu_indices]
+
+            # Calculate the median of these distances
+            sigma = np.median(upper_tri_distances)
+
+        K = np.exp(-pairwise_sq_dists_X / (2 * sigma**2))
+        L =  np.exp(-pairwise_sq_dists_Y / (2 * sigma**2))
     else:
         K = pairwise_kernels(data1, metric='linear')
         L = pairwise_kernels(data2, metric='linear')
@@ -89,34 +94,71 @@ def permutation_test(X, Y, test_method, P=2000, **kwargs):
 
     return T, p_val, perm_stats
 
-#generates multivariate Gaussian  data with rho in all entries in the anti-diagonal block matrices
-def generate_data(N=200, p=4, q=4, rho = 0.5, mean = 0):
-    cov = np.eye(p+q,p+q)
-    for i in range(p):
-        if (i <= p):
-            cov[i, p+i] = rho
-            cov[i+p, i] = rho
-            for j in range(p):
-                if (j != i):
-                    cov[i, p+j] = rho
-                    cov[p+j, i] = rho
 
-    sim = np.random.multivariate_normal(np.full(p + q, mean), cov, N)
-    X = sim[:, :p]
-    Y = sim[:, p:]
-    return X,Y
+#Generating data
 
-#generates multivariate Gaussian data with rho in only the anti-diagonal
-def generate_data2(N=200, p=4, q=4, rho=0.5, mean=0):
-    cov = np.eye(p + q)
+def standardize(data):
+    return (data - data.mean(axis=0)) / data.std(axis=0)
 
-    for i in range(p):
-        cov[i, (p + q - 1) - i] = rho
-        cov[(p + q - 1) - i, i] = rho
 
-    mean= np.full(p + q, mean)
-    sim = np.random.multivariate_normal(mean, cov, N)
-    X = sim[:, :p]
-    Y = sim[:, p:]
+def generate_data_m1(A, N=200):
+    XY_2 = np.random.uniform(0, 1, size=(N, 2))
+
+    theta = np.random.uniform(0, 2 * np.pi, size=N)
+    epsilon = np.random.normal(size=(N, 2))
+
+    X1 = A * np.cos(theta) + (epsilon[:, 0] * 0.25)
+    Y1 = A * np.sin(theta) + (epsilon[:, 1] * 0.25)
+
+    X = np.vstack((X1, XY_2[:, 0])).T
+    Y = np.vstack((Y1, XY_2[:, 1])).T
+
+    # Standardize the data
+    X = standardize(X)
+    Y = standardize(Y)
+
+    return X, Y
+
+
+def generate_data_m2(rho, N=200):
+    epsilon = np.random.normal(0, 1, size=N)
+    X1 = np.random.uniform(-1, 1, size=N)
+    Y1 = (np.abs(X1) ** rho) * epsilon
+
+    X2 = np.random.uniform(0, 1, size=N)
+    Y2 = np.random.uniform(0, 1, size=N)
+
+    X = np.column_stack((X1, X2))
+    Y = np.column_stack((Y1, Y2))
+
+    # Standardize the data
+    X = standardize(X)
+    Y = standardize(Y)
+
+    return X, Y
+
+
+def generate_data_m3(a, N=100):
+    X1 = np.random.uniform(-np.pi, np.pi, N)
+    Y1 = []
+
+    X2 = np.random.uniform(0, 1, size=N)
+    Y2 = np.random.uniform(0, 1, size=N)
+
+    p_y_given_x = lambda y, x: 1 / (2 * np.pi) * (1 + np.sin(a * x) * np.sin(a * y))
+    for x in X1:
+        reject = True
+        while reject:
+            y = np.random.uniform(-np.pi, np.pi, size=1)
+            U = np.random.uniform(0, 1, size=1)
+            reject = p_y_given_x(y, x) < U
+        Y1.append(y[0])
+
+    X = np.column_stack((X1, X2))
+    Y = np.column_stack((Y1, Y2))
+
+    # Standardize the data
+    X = standardize(X)
+    Y = standardize(Y)
 
     return X, Y
